@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+
+# Environment variables & secrets
+.env
+.env.local
+*.pem
+
+# AI Agents global symlinks & configs
+.agents
+.cursorrules
+
+# OS / Editor junk
+.DS_Store
+*.log

@@ -1,0 +1,14 @@
+services:
+  nexus-app:
+    build: .
+    container_name: nexus-life-os
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NOTES_DIR=/app/notes
+      - NODE_ENV=production
+    volumes:
+      # Bind mount local notes directory so edits immediately persist to host disk
+      - ./notes:/app/notes
+    restart: unless-stopped
