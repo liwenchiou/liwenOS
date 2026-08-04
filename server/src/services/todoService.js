@@ -36,7 +36,7 @@ class TodoService {
 
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: `'${tabName}'!A1:G300`,
+        range: `'${tabName}'!A1:Z2000`,
       });
 
       const rows = response.data.values || [];

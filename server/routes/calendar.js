@@ -96,7 +96,8 @@ router.get('/events', async (req, res) => {
         start: item.start.dateTime || item.start.date,
         end: item.end.dateTime || item.end.date,
         location: item.location || '',
-        description: item.description || ''
+        description: item.description || '',
+        source: 'AI 助理行事曆'
       }));
 
       return res.json({ success: true, isLive: true, events });
@@ -152,8 +153,20 @@ router.get('/events', async (req, res) => {
 
 // 4. Create Calendar Event
 router.post('/events', async (req, res) => {
-  const { summary, startTime, endTime, description, location } = req.body;
+  const { summary, startTime, endTime, description, location, isAllDay } = req.body;
   const oauth2Client = getOAuthClient();
+
+  let startPayload, endPayload;
+  if (isAllDay) {
+    const endD = new Date(`${endTime}T00:00:00`);
+    endD.setDate(endD.getDate() + 1);
+    const exclusiveEndStr = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, '0')}-${String(endD.getDate()).padStart(2, '0')}`;
+    startPayload = { date: startTime };
+    endPayload = { date: exclusiveEndStr };
+  } else {
+    startPayload = { dateTime: new Date(startTime).toISOString() };
+    endPayload = { dateTime: new Date(endTime).toISOString() };
+  }
 
   if (oauth2Client && userTokens) {
     try {
@@ -166,8 +179,8 @@ router.post('/events', async (req, res) => {
           summary,
           description,
           location,
-          start: { dateTime: new Date(startTime).toISOString() },
-          end: { dateTime: new Date(endTime).toISOString() }
+          start: startPayload,
+          end: endPayload
         }
       });
 
@@ -181,8 +194,8 @@ router.post('/events', async (req, res) => {
   const newEvent = {
     id: `mock-evt-${Date.now()}`,
     summary: summary || '新建立行程',
-    start: startTime || new Date().toISOString(),
-    end: endTime || new Date(Date.now() + 3600000).toISOString(),
+    start: isAllDay ? startTime : (startTime || new Date().toISOString()),
+    end: isAllDay ? endPayload.date : (endTime || new Date(Date.now() + 3600000).toISOString()),
     location: location || '',
     description: description || ''
   };

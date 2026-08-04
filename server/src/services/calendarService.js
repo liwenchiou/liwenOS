@@ -5,6 +5,10 @@ const fs = require('fs');
 let userTokens = null;
 
 class CalendarService {
+  constructor() {
+    this.monthCache = new Map();
+  }
+
   // Dynamically load fresh .env values on demand
   loadFreshEnv() {
     try {
@@ -163,17 +167,23 @@ class CalendarService {
 
       const parseIcsDate = (dateStr) => {
         if (!dateStr) return null;
-        const clean = dateStr.replace(/[^0-9T]/g, '');
+        const clean = dateStr.replace(/[^0-9TZ]/ig, '');
         if (clean.length >= 8) {
           const y = parseInt(clean.substring(0, 4), 10);
           const m = parseInt(clean.substring(4, 6), 10) - 1;
           const d = parseInt(clean.substring(6, 8), 10);
-          const timePart = clean.includes('T') ? clean.split('T')[1] : '000000';
+          
+          if (!clean.includes('T')) {
+            // 全天行程 (VALUE=DATE, 如 20260819)：設定為當日中午 12 點，避免 UTC 與當地時區換算時跨日
+            return new Date(y, m, d, 12, 0, 0);
+          }
+
+          const timePart = clean.split('T')[1] || '000000';
           const hh = parseInt(timePart.substring(0, 2) || '00', 10);
           const mm = parseInt(timePart.substring(2, 4) || '00', 10);
           const ss = parseInt(timePart.substring(4, 6) || '00', 10);
           
-          if (clean.endsWith('Z')) {
+          if (clean.toUpperCase().endsWith('Z')) {
             return new Date(Date.UTC(y, m, d, hh, mm, ss));
           }
           return new Date(y, m, d, hh, mm, ss);
@@ -187,16 +197,29 @@ class CalendarService {
       const location = getFieldValue('LOCATION');
       const description = getFieldValue('DESCRIPTION');
 
+      const formatAllDayStr = (str) => {
+        const clean = (str || '').replace(/[^0-9]/g, '');
+        if (clean.length >= 8) {
+          return `${clean.substring(0, 4)}-${clean.substring(4, 6)}-${clean.substring(6, 8)}`;
+        }
+        return null;
+      };
+
+      const uid = getFieldValue('UID');
+
       if (summary && dtStart) {
+        const isAllDay = !dtStart.includes('T');
         const startDate = parseIcsDate(dtStart);
-        const endDate = dtEnd ? parseIcsDate(dtEnd) : startDate;
+        const startVal = isAllDay ? formatAllDayStr(dtStart) : startDate?.toISOString();
+        const endVal = isAllDay ? (dtEnd && !dtEnd.includes('T') ? formatAllDayStr(dtEnd) : startVal) : (dtEnd ? parseIcsDate(dtEnd)?.toISOString() : startVal);
 
         if (startDate && startDate.getFullYear() >= 2000) {
+          const stableId = uid || `icloud-${ownerName}-${Buffer.from(summary + startVal).toString('hex').slice(0, 16)}`;
           events.push({
-            id: `icloud-${ownerName}-${i}-${Date.now()}`,
+            id: stableId,
             summary: `☁️ [${ownerName}] ${summary}`,
-            start: startDate.toISOString(),
-            end: endDate ? endDate.toISOString() : startDate.toISOString(),
+            start: startVal,
+            end: endVal,
             location: location.replace(/\\,/g, ','),
             description: description.replace(/\\n/g, '\n'),
             source: `${ownerName}`
@@ -208,16 +231,23 @@ class CalendarService {
     return events;
   }
 
-  async getEvents() {
+  async getEvents(targetYear, targetMonth) {
     const targetCalendarId = this.getTargetCalendarId();
     const oauth2Client = this.getOAuthClient();
     let googleEvents = [];
     let isLive = false;
 
-    // Full Current Month Boundaries (1st day 00:00:00 ~ Last day 23:59:59)
+    // 使用傳入的年月參數計算月邊界，未傳入時 fallback 為當月
     const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
+    const year = targetYear != null ? parseInt(targetYear, 10) : now.getFullYear();
+    const month = targetMonth != null ? parseInt(targetMonth, 10) - 1 : now.getMonth(); // API 傳入為 1-12，轉換為 0-11
+
+    const cacheKey = `${year}-${month}`;
+    const cached = this.monthCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < 60000)) {
+      return cached.data;
+    }
+
     const startOfMonth = new Date(year, month, 1, 0, 0, 0, 0);
     const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
 
@@ -263,10 +293,13 @@ class CalendarService {
       (a, b) => new Date(a.start) - new Date(b.start)
     );
 
-    return { isLive, targetCalendarId, events: combinedEvents };
+    const result = { isLive, targetCalendarId, events: combinedEvents };
+    this.monthCache.set(cacheKey, { timestamp: Date.now(), data: result });
+    return result;
   }
 
   async createEvent(eventData) {
+    this.monthCache.clear();
     const { summary, startTime, endTime, description, location } = eventData;
     const targetCalendarId = this.getTargetCalendarId();
     const oauth2Client = this.getOAuthClient();

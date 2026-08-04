@@ -7,11 +7,13 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
   const [endTime, setEndTime] = useState('');
   const [location, setLocation] = useState('');
   const [description, setDescription] = useState('');
+  const [isAllDay, setIsAllDay] = useState(false);
 
   useEffect(() => {
     setSummary(initialTitle || '');
     setLocation('');
     setDescription('');
+    setIsAllDay(false);
     // Set default start time to today + 1 hour
     const now = new Date();
     now.setHours(now.getHours() + 1, 0, 0, 0);
@@ -22,6 +24,18 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
     const endIso = new Date(endObj.getTime() - (endObj.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
     setEndTime(endIso);
   }, [initialTitle, isOpen]);
+
+  const handleToggleAllDay = (e) => {
+    const nextAllDay = e.target.checked;
+    setIsAllDay(nextAllDay);
+    if (nextAllDay) {
+      setStartTime(startTime.slice(0, 10));
+      setEndTime(endTime.slice(0, 10));
+    } else {
+      setStartTime(`${startTime.slice(0, 10)}T09:00`);
+      setEndTime(`${endTime.slice(0, 10)}T10:00`);
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -44,7 +58,7 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
       if (showToast) showToast('請輸入行程標題！', 'error');
       return;
     }
-    onCreateEvent({ summary, startTime, endTime, location, description });
+    onCreateEvent({ summary, startTime, endTime, location, description, isAllDay });
     onClose();
   };
 
@@ -78,9 +92,11 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div>
-            <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>行程名稱</label>
+            <label htmlFor="event-summary" style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', cursor: 'pointer' }}>行程名稱</label>
             <input
+              id="event-summary"
               type="text"
+              autoFocus
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
               placeholder="例: 與團隊討論規格"
@@ -97,11 +113,25 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
             />
           </div>
 
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
+            <input
+              id="event-is-allday"
+              type="checkbox"
+              checked={isAllDay}
+              onChange={handleToggleAllDay}
+              style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--primary-main)' }}
+            />
+            <label htmlFor="event-is-allday" style={{ fontSize: '13px', color: 'var(--text-main)', cursor: 'pointer', fontWeight: '500' }}>
+              🌅 全天行程 (All Day)
+            </label>
+          </div>
+
           <div style={{ display: 'flex', gap: '12px' }}>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>開始時間</label>
+              <label htmlFor="event-start-time" style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', cursor: 'pointer' }}>開始時間</label>
               <input
-                type="datetime-local"
+                id="event-start-time"
+                type={isAllDay ? 'date' : 'datetime-local'}
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
                 required
@@ -118,9 +148,10 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
               />
             </div>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>結束時間</label>
+              <label htmlFor="event-end-time" style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', cursor: 'pointer' }}>結束時間</label>
               <input
-                type="datetime-local"
+                id="event-end-time"
+                type={isAllDay ? 'date' : 'datetime-local'}
                 value={endTime}
                 onChange={(e) => setEndTime(e.target.value)}
                 required
@@ -139,8 +170,9 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
           </div>
 
           <div>
-            <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>地點 / 會議連結</label>
+            <label htmlFor="event-location" style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', cursor: 'pointer' }}>地點 / 會議連結</label>
             <input
+              id="event-location"
               type="text"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
@@ -158,8 +190,9 @@ export default function CreateEventModal({ isOpen, onClose, onCreateEvent, initi
           </div>
 
           <div>
-            <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>詳細描述 / 備註</label>
+            <label htmlFor="event-description" style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', cursor: 'pointer' }}>詳細描述 / 備註</label>
             <textarea
+              id="event-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="由 liwen OS 自動連動同步至 Google Calendar"

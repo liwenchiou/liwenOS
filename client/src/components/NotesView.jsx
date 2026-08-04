@@ -1,6 +1,84 @@
-import React, { useState, useEffect } from 'react';
-import { Folder, FileText, Plus, Save, Trash2, Calendar, Sparkles, FolderPlus, FilePlus, X, Eye, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Folder, FileText, Plus, Save, Trash2, Calendar, Sparkles, FolderPlus, FilePlus, X, Eye, EyeOff, ExternalLink } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
+
+// Markdown → HTML 解析工具函式
+const parseMarkdownToHtml = (markdownText) => {
+  if (!markdownText) return '';
+  const lines = markdownText.split('\n');
+  const htmlLines = [];
+  let inCodeBlock = false;
+  let codeBlockContent = [];
+  let codeBlockLang = '';
+  let inTable = false;
+  let tableRows = [];
+
+  const parseInline = (text) => {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')       // 粗體
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')                   // 斜體
+      .replace(/`([^`]+)`/g, '<code>$1</code>')               // 行內程式碼
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:6px;margin:8px 0;" />') // 圖片
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:#5e6ad2;">$1</a>'); // 連結
+  };
+
+  const flushTable = () => {
+    if (tableRows.length === 0) return;
+    let tableHtml = '<table>';
+    tableRows.forEach((row, idx) => {
+      if (idx === 1 && /^\|[\s\-:|]+\|$/.test(row.trim())) return;
+      const tag = idx === 0 ? 'th' : 'td';
+      const cells = row.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
+      tableHtml += '<tr>' + cells.map(c => `<${tag}>${parseInline(c.trim())}</${tag}>`).join('') + '</tr>';
+    });
+    tableHtml += '</table>';
+    htmlLines.push(tableHtml);
+    tableRows = [];
+    inTable = false;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('```')) {
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        codeBlockLang = line.trim().replace('```', '').trim();
+        codeBlockContent = [];
+      } else {
+        htmlLines.push(`<pre><code class="lang-${codeBlockLang}">${codeBlockContent.join('\n').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`);
+        inCodeBlock = false;
+        codeBlockLang = '';
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      codeBlockContent.push(line);
+      continue;
+    }
+    if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+      inTable = true;
+      tableRows.push(line.trim());
+      continue;
+    } else if (inTable) {
+      flushTable();
+    }
+    if (/^(\-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
+      htmlLines.push('<hr/>');
+      continue;
+    }
+    if (line.startsWith('### ')) { htmlLines.push(`<h3>${parseInline(line.slice(4))}</h3>`); continue; }
+    if (line.startsWith('## ')) { htmlLines.push(`<h2>${parseInline(line.slice(3))}</h2>`); continue; }
+    if (line.startsWith('# ')) { htmlLines.push(`<h1>${parseInline(line.slice(2))}</h1>`); continue; }
+    if (line.startsWith('> ')) { htmlLines.push(`<blockquote>${parseInline(line.slice(2))}</blockquote>`); continue; }
+    if (line.startsWith('- [ ] ')) { htmlLines.push(`<li class="task-item"><input type="checkbox" disabled /> ${parseInline(line.slice(6))}</li>`); continue; }
+    if (line.startsWith('- [x] ')) { htmlLines.push(`<li class="task-item checked"><input type="checkbox" checked disabled /> ${parseInline(line.slice(6))}</li>`); continue; }
+    if (line.startsWith('- ')) { htmlLines.push(`<li>${parseInline(line.slice(2))}</li>`); continue; }
+    if (line.trim() === '') { htmlLines.push('<br/>'); continue; }
+    htmlLines.push(`<p>${parseInline(line)}</p>`);
+  }
+  if (inTable) flushTable();
+  return htmlLines.join('\n');
+};
 
 export default function NotesView({
   notesTree,
@@ -17,6 +95,8 @@ export default function NotesView({
   const [newInputName, setNewInputName] = useState('');
   const [createType, setCreateType] = useState(null); // 'file' or 'folder' or null
   const [deleteTargetNode, setDeleteTargetNode] = useState(null);
+  const [splitView, setSplitView] = useState(false); // 是否開啟左右分割即時預覽
+  const gutterRef = useRef(null);
 
   useEffect(() => {
     setEditorText(fileContent || '');
@@ -39,6 +119,20 @@ export default function NotesView({
     if (!selectedFilePath) return;
     onSaveFile(selectedFilePath, editorText);
   };
+
+  // ⌘+S / Ctrl+S 快捷鍵儲存
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault(); // 阻止瀏覽器預設存檔對話框
+        if (selectedFilePath) {
+          onSaveFile(selectedFilePath, editorText);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedFilePath, editorText, onSaveFile]);
 
   const handleCreateSubmit = (e) => {
     e.preventDefault();
@@ -68,95 +162,8 @@ export default function NotesView({
       return;
     }
 
-    // Markdown → HTML 完整解析器
-    const lines = editorText.split('\n');
-    const htmlLines = [];
-    let inCodeBlock = false;
-    let codeBlockContent = [];
-    let codeBlockLang = '';
-    let inTable = false;
-    let tableRows = [];
-
-    const parseInline = (text) => {
-      return text
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')       // 粗體
-        .replace(/\*(.*?)\*/g, '<em>$1</em>')                   // 斜體
-        .replace(/`([^`]+)`/g, '<code>$1</code>')               // 行內程式碼
-        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:6px;margin:8px 0;" />') // 圖片
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:#5e6ad2;">$1</a>'); // 連結
-    };
-
-    const flushTable = () => {
-      if (tableRows.length === 0) return;
-      let tableHtml = '<table>';
-      tableRows.forEach((row, idx) => {
-        // 跳過第二行（分隔線 |---|---|）
-        if (idx === 1 && /^\|[\s\-:|]+\|$/.test(row.trim())) return;
-        const tag = idx === 0 ? 'th' : 'td';
-        const cells = row.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
-        tableHtml += '<tr>' + cells.map(c => `<${tag}>${parseInline(c.trim())}</${tag}>`).join('') + '</tr>';
-      });
-      tableHtml += '</table>';
-      htmlLines.push(tableHtml);
-      tableRows = [];
-      inTable = false;
-    };
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // 程式碼區塊（``` 開頭 / 結尾）
-      if (line.trim().startsWith('```')) {
-        if (!inCodeBlock) {
-          inCodeBlock = true;
-          codeBlockLang = line.trim().replace('```', '').trim();
-          codeBlockContent = [];
-        } else {
-          htmlLines.push(`<pre><code class="lang-${codeBlockLang}">${codeBlockContent.join('\n').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`);
-          inCodeBlock = false;
-          codeBlockLang = '';
-        }
-        continue;
-      }
-      if (inCodeBlock) {
-        codeBlockContent.push(line);
-        continue;
-      }
-
-      // 表格偵測（行首為 | 開頭且行尾為 | 結尾）
-      if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
-        inTable = true;
-        tableRows.push(line.trim());
-        continue;
-      } else if (inTable) {
-        flushTable();
-      }
-
-      // 水平分隔線 (--- / *** / ___)
-      if (/^(\-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
-        htmlLines.push('<hr/>');
-        continue;
-      }
-      // 標題 (h1~h3)
-      if (line.startsWith('### ')) { htmlLines.push(`<h3>${parseInline(line.slice(4))}</h3>`); continue; }
-      if (line.startsWith('## ')) { htmlLines.push(`<h2>${parseInline(line.slice(3))}</h2>`); continue; }
-      if (line.startsWith('# ')) { htmlLines.push(`<h1>${parseInline(line.slice(2))}</h1>`); continue; }
-      // 引用區塊
-      if (line.startsWith('> ')) { htmlLines.push(`<blockquote>${parseInline(line.slice(2))}</blockquote>`); continue; }
-      // 待辦事項 checkbox
-      if (line.startsWith('- [ ] ')) { htmlLines.push(`<li class="task-item"><input type="checkbox" disabled /> ${parseInline(line.slice(6))}</li>`); continue; }
-      if (line.startsWith('- [x] ')) { htmlLines.push(`<li class="task-item checked"><input type="checkbox" checked disabled /> ${parseInline(line.slice(6))}</li>`); continue; }
-      // 無序列表
-      if (line.startsWith('- ')) { htmlLines.push(`<li>${parseInline(line.slice(2))}</li>`); continue; }
-      // 空行
-      if (line.trim() === '') { htmlLines.push('<br/>'); continue; }
-      // 一般段落文字
-      htmlLines.push(`<p>${parseInline(line)}</p>`);
-    }
-    // 若檔案結尾仍在表格中，清空剩餘的表格資料
-    if (inTable) flushTable();
-
-    const parsedHtml = htmlLines.join('\n');
+    // Markdown → HTML 解析
+    const parsedHtml = parseMarkdownToHtml(editorText);
 
     const fileNameDisplay = selectedFilePath || '草稿筆記';
 
@@ -381,35 +388,94 @@ export default function NotesView({
           </div>
 
           <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
+            <button className="btn-secondary" onClick={() => setSplitView(!splitView)} title="切換左右分割即時預覽 (Split View)">
+              {splitView ? <EyeOff size={14} /> : <Eye size={14} />} {splitView ? '關閉即時預覽' : '分割即時預覽'}
+            </button>
             <button className="btn-secondary" onClick={handleOpenHtmlPreview}>
               <ExternalLink size={14} /> 開啟 HTML 分頁預覽
             </button>
-            <button className="btn-primary" onClick={handleSave}>
-              <Save size={15} /> 儲存筆記 (Save)
+            <button className="btn-primary" onClick={handleSave} title="快速存檔快捷鍵: ⌘+S 或 Ctrl+S">
+              <Save size={15} /> 儲存筆記 (⌘+S)
             </button>
           </div>
         </div>
 
-        {/* Markdown Monospace Code Textarea */}
-        <textarea
-          value={editorText}
-          onChange={(e) => setEditorText(e.target.value)}
-          placeholder="選擇檔案後即可開始撰寫 Markdown 筆記..."
-          style={{
+        {/* Markdown Monospace Code Textarea with Line Numbers Gutter (+ Split View Realtime HTML Preview) */}
+        <div style={{ flex: 1, display: 'flex', gap: '16px', overflow: 'hidden' }}>
+          <div style={{
             flex: 1,
-            width: '100%',
+            display: 'flex',
             background: 'rgba(15, 23, 42, 0.7)',
             border: '1px solid var(--border-glass)',
             borderRadius: 'var(--radius-md)',
-            padding: '20px',
-            color: 'var(--text-main)',
-            fontFamily: 'monospace',
-            fontSize: '14px',
-            lineHeight: '1.7',
-            resize: 'none',
-            outline: 'none'
-          }}
-        />
+            overflow: 'hidden'
+          }}>
+            {/* 行號欄 */}
+            <div
+              ref={gutterRef}
+              style={{
+                padding: '20px 10px',
+                background: 'rgba(11, 13, 18, 0.5)',
+                borderRight: '1px solid var(--border-glass)',
+                color: 'var(--text-dim)',
+                fontFamily: 'monospace',
+                fontSize: '14px',
+                lineHeight: '1.7',
+                textAlign: 'right',
+                userSelect: 'none',
+                overflowY: 'hidden',
+                minWidth: '42px',
+                flexShrink: 0
+              }}
+            >
+              {Array.from({ length: Math.max(1, (editorText || '').split('\n').length) }, (_, i) => (
+                <div key={i + 1}>{i + 1}</div>
+              ))}
+            </div>
+            <textarea
+              value={editorText}
+              onChange={(e) => setEditorText(e.target.value)}
+              onScroll={(e) => {
+                if (gutterRef.current) gutterRef.current.scrollTop = e.target.scrollTop;
+              }}
+              placeholder="選擇檔案後即可開始撰寫 Markdown 筆記..."
+              style={{
+                flex: 1,
+                width: '100%',
+                height: '100%',
+                background: 'transparent',
+                border: 'none',
+                padding: '20px',
+                color: 'var(--text-main)',
+                fontFamily: 'monospace',
+                fontSize: '14px',
+                lineHeight: '1.7',
+                resize: 'none',
+                outline: 'none',
+                overflowY: 'auto'
+              }}
+            />
+          </div>
+          {splitView && (
+            <div
+              className="markdown-preview"
+              style={{
+                flex: 1,
+                height: '100%',
+                overflowY: 'auto',
+                background: 'rgba(11, 13, 18, 0.75)',
+                border: '1px solid var(--border-glass)',
+                borderRadius: 'var(--radius-md)',
+                padding: '20px',
+                color: 'var(--text-main)',
+                fontSize: '14px',
+                lineHeight: '1.7',
+                wordBreak: 'break-word'
+              }}
+              dangerouslySetInnerHTML={{ __html: parseMarkdownToHtml(editorText || '') }}
+            />
+          )}
+        </div>
 
       </div>
 

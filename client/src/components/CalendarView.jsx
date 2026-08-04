@@ -1,14 +1,29 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Calendar as CalendarIcon, Clock, Plus, FilePlus, Link, Check, Sparkles, Grid, List, X, ShieldAlert, Key, ChevronLeft, ChevronRight } from 'lucide-react';
+import EventNoteModal from './EventNoteModal';
 
-export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote }) {
+export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote, onFetchEvents }) {
   const [viewMode, setViewMode] = useState('month'); // Default to full-width 'month' view
   const [selectedEvent, setSelectedEvent] = useState(null);
-  const [extraNotesText, setExtraNotesText] = useState('');
   const [viewDate, setViewDate] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
+
+  const lastFetchedMonthRef = useRef(null);
+
+  // 當 viewDate 切月且年月真正變更時，才回呼父元件重新撈取對應月份的行事曆事件
+  useEffect(() => {
+    if (onFetchEvents) {
+      const y = viewDate.getFullYear();
+      const m = viewDate.getMonth() + 1; // API 使用 1-12
+      const key = `${y}-${m}`;
+      if (lastFetchedMonthRef.current !== key) {
+        lastFetchedMonthRef.current = key;
+        onFetchEvents(y, m);
+      }
+    }
+  }, [viewDate, onFetchEvents]);
 
   const hours = Array.from({ length: 14 }, (_, i) => i + 8); // 8:00 AM to 9:00 PM
 
@@ -24,88 +39,83 @@ export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const monthName = viewDate.toLocaleDateString('zh-TW', { year: 'numeric', month: 'long' });
 
-  // Filter 1: Valid events (Exclude invalid / 1970 dummy test entries)
-  const validEvents = (events || []).filter(e => {
-    const d = new Date(e.start);
-    return d.getFullYear() >= 2000;
-  });
+  // Filter 1: Valid start dates >= Year 2000 & 去除重複行程
+  const validEvents = (() => {
+    const seen = new Set();
+    return (events || []).filter(e => {
+      if (!e.start) return false;
+      const d = new Date(e.start);
+      if (isNaN(d.getTime()) && (typeof e.start !== 'string' || e.start.length !== 10)) return false;
+      if (d.getFullYear() < 2000 && e.start.length !== 10) return false;
+      const key = `${e.summary}|${e.start}|${e.end}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  })();
 
-  // Filter 2: Strictly Today's Events for Timeline View
-  const nowObj = new Date();
-  const yearStr = nowObj.getFullYear();
-  const monthStr = String(nowObj.getMonth() + 1).padStart(2, '0');
-  const dayStr = String(nowObj.getDate()).padStart(2, '0');
-  const todayYYYYMMDD = `${yearStr}-${monthStr}-${dayStr}`;
-
-  const todayEvents = validEvents.filter(e => {
+  // 檢查某行程是否落在目標日期 (支援多日跨天持續顯示，並遵循 RFC 5545 與 Google Calendar 獨佔結束日規範)
+  const isEventOnDay = (e, targetYear, targetMonth, targetDay) => {
     if (!e.start) return false;
-    if (typeof e.start === 'string' && e.start.startsWith(todayYYYYMMDD)) return true;
-    return new Date(e.start).toDateString() === todayStr;
-  });
+    const targetDateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+    
+    // 1. 純日期 YYYY-MM-DD (10 字元全天行程) 的比對
+    if (typeof e.start === 'string' && e.start.length === 10 && !e.start.includes('T')) {
+      const startStr = e.start;
+      const endStr = (e.end && e.end.length === 10 && !e.end.includes('T')) ? e.end : startStr;
+      if (endStr > startStr) {
+        // 遵循 iCalendar (RFC 5545) 與 Google Calendar API：全天行程 end 為獨佔 (exclusive) 隔日
+        // 範例：8/3 單日全天行程 start="2026-08-03", end="2026-08-04" ➔ 僅在 8/3 (targetDateStr < endStr) 顯示
+        return targetDateStr >= startStr && targetDateStr < endStr;
+      }
+      return targetDateStr === startStr;
+    }
+
+    // 2. 一般或 ISO 時間格式：建立本地當日 00:00:00 與 23:59:59 邊界進行區間交集驗證
+    const cellStart = new Date(targetYear, targetMonth, targetDay, 0, 0, 0, 0);
+    const cellEnd = new Date(targetYear, targetMonth, targetDay, 23, 59, 59, 999);
+
+    const evtStart = new Date(e.start);
+    const evtEnd = e.end ? new Date(e.end) : evtStart;
+    if (isNaN(evtStart.getTime())) return false;
+    const finalEnd = isNaN(evtEnd.getTime()) ? evtStart : evtEnd;
+
+    return evtStart <= cellEnd && finalEnd >= cellStart;
+  };
+
+  // Filter 2: Strictly Today's Events for Timeline View (支援多日持續的行程)
+  const nowObj = new Date();
+  const todayEvents = validEvents.filter(e => 
+    isEventOnDay(e, nowObj.getFullYear(), nowObj.getMonth(), nowObj.getDate())
+  );
 
   const handleSelectEvent = (evt) => {
     setSelectedEvent(evt);
-    setExtraNotesText('');
   };
 
-  useEffect(() => {
-    if (!selectedEvent) return undefined;
 
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setSelectedEvent(null);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEvent]);
-
-  const handleSaveAsNoteFile = () => {
-    if (!selectedEvent) return;
-
-    const timeString = `${new Date(selectedEvent.start).toLocaleString()} - ${new Date(selectedEvent.end).toLocaleTimeString()}`;
-    
-    let mdContent = `# 📌 會議記錄：${selectedEvent.summary}\n\n`;
-    mdContent += `- **行程名稱**：${selectedEvent.summary}\n`;
-    mdContent += `- **日期時間**：${timeString}\n`;
-    mdContent += `- **來源**：${selectedEvent.source || 'Google Calendar'}\n`;
-    if (selectedEvent.location) {
-      mdContent += `- **地點/連結**：${selectedEvent.location}\n`;
-    }
-    mdContent += `\n---\n\n## 💡 補充紀錄與觀察\n`;
-    mdContent += extraNotesText.trim() ? extraNotesText : `- (無補充紀錄)\n`;
-    mdContent += `\n\n## 🚀 待辦事項 (Action Items)\n- [ ] \n`;
-
-    const fileName = `daily/meeting-${selectedEvent.summary.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}.md`;
-    onSaveNewNote(fileName, mdContent);
-
-    setSelectedEvent(null);
-    setExtraNotesText('');
-  };
-
-  // Helper for source badge aesthetics
+  // Helper for source badge aesthetics: 1. AI助理行事曆(綠色) 2. 貝貝行事曆(黃色) 3. 安大行事曆(紫色)
   const getSourceBadgeStyle = (source) => {
     const src = (source || '').toLowerCase();
     if (src.includes('貝貝') || src.includes('beibei')) {
       return {
-        background: 'linear-gradient(135deg, rgba(244, 63, 94, 0.25), rgba(236, 72, 153, 0.2))',
-        border: '1px solid rgba(251, 113, 133, 0.4)',
-        color: '#fda4af'
+        background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.28), rgba(217, 119, 6, 0.22))',
+        border: '1px solid rgba(251, 191, 36, 0.45)',
+        color: '#fde047'
       };
     }
     if (src.includes('安大') || src.includes('andal')) {
       return {
-        background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.25), rgba(14, 165, 233, 0.2))',
-        border: '1px solid rgba(56, 189, 248, 0.4)',
-        color: '#7dd3fc'
+        background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.28), rgba(109, 40, 217, 0.22))',
+        border: '1px solid rgba(167, 139, 250, 0.45)',
+        color: '#d8b4fe'
       };
     }
-    // Default: AI 助理行事曆
+    // Default: AI 助理行事曆 (綠色)
     return {
-      background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.25), rgba(99, 102, 241, 0.2))',
-      border: '1px solid rgba(167, 139, 250, 0.4)',
-      color: '#c4b5fd'
+      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(5, 150, 105, 0.22))',
+      border: '1px solid rgba(52, 211, 153, 0.45)',
+      color: '#6ee7b7'
     };
   };
 
@@ -197,8 +207,15 @@ export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote 
               const timeStr = `${hour.toString().padStart(2, '0')}:00`;
               const isCurrentHour = currentHour === hour;
               const matchingEvents = todayEvents.filter(e => {
-                const startHour = new Date(e.start).getHours();
-                return startHour === hour;
+                const isAllDay = typeof e.start === 'string' && e.start.length === 10 && !e.start.includes('T');
+                const startObj = new Date(e.start);
+                const isContinuedFromPast = !isAllDay && startObj.getDate() !== nowObj.getDate();
+                
+                // 全天行程或昨天以前開始持續至今的跨日行程，統一顯示在早上 09:00 時段
+                if (isAllDay || isContinuedFromPast) {
+                  return hour === 9;
+                }
+                return startObj.getHours() === hour;
               });
 
               return (
@@ -334,14 +351,7 @@ export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote 
                 const cellDate = new Date(year, month, dayNum);
                 const isToday = cellDate.toDateString() === todayDate.toDateString();
 
-                const dayFormattedStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-
-                const dayMatchingEvents = validEvents.filter(e => {
-                  if (!e.start) return false;
-                  if (typeof e.start === 'string' && e.start.startsWith(dayFormattedStr)) return true;
-                  const evtDate = new Date(e.start);
-                  return evtDate.getFullYear() === year && evtDate.getMonth() === month && evtDate.getDate() === dayNum;
-                });
+                const dayMatchingEvents = validEvents.filter(e => isEventOnDay(e, year, month, dayNum));
 
                 return (
                   <div
@@ -372,7 +382,7 @@ export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote 
                       </span>
                     </div>
 
-                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {dayMatchingEvents.map(evt => {
                         const badgeStyle = getSourceBadgeStyle(evt.source);
                         return (
@@ -381,8 +391,11 @@ export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote 
                             onClick={() => handleSelectEvent(evt)}
                             style={{
                               fontSize: '11px',
-                              lineHeight: '1.4',
-                              padding: '4px 8px',
+                              lineHeight: '1.5',
+                              padding: '3px 8px',
+                              minHeight: '24px',
+                              display: 'flex',
+                              alignItems: 'center',
                               ...badgeStyle,
                               borderRadius: '5px',
                               cursor: 'pointer',
@@ -390,6 +403,7 @@ export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote 
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               fontWeight: '500',
+                              flexShrink: 0,
                               transition: 'var(--transition-fast)'
                             }}
                             title={`${evt.summary} (${evt.source || 'Google Calendar'})`}
@@ -408,87 +422,13 @@ export default function CalendarView({ events, onOpenCreateModal, onSaveNewNote 
 
       </div>
 
-      {/* Floating Centered Glassmorphism Modal for Event Note Inspection */}
-      {selectedEvent && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(9, 13, 22, 0.8)',
-          backdropFilter: 'blur(12px)',
-          display: 'grid',
-          placeContent: 'center',
-          zIndex: 1000
-        }}>
-          <div className="glass-panel" style={{
-            width: '560px',
-            padding: '24px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
-            animation: 'slideUp 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
-          }}>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Sparkles size={20} color="var(--accent-cyan)" /> 📌 行程會議筆記與紀錄
-              </h3>
-              <button type="button" onClick={() => setSelectedEvent(null)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Event Info Card */}
-            <div className="glass-card" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(30, 41, 59, 0.7)' }}>
-              <div style={{ fontSize: '14px', fontWeight: '600' }}>
-                📌 名稱：<span style={{ color: 'var(--text-main)' }}>{selectedEvent.summary}</span>
-              </div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                🕒 時間：{new Date(selectedEvent.start).toLocaleString()} - {new Date(selectedEvent.end).toLocaleTimeString()}
-              </div>
-              {selectedEvent.location && (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  📍 地點/連結：{selectedEvent.location}
-                </div>
-              )}
-            </div>
-
-            {/* Input Box */}
-            <div>
-              <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)', marginBottom: '6px', display: 'block' }}>
-                ✍️ 補充內容 (您可以輸入會議紀錄、討論要點或隨筆)：
-              </label>
-              <textarea
-                value={extraNotesText}
-                onChange={(e) => setExtraNotesText(e.target.value)}
-                placeholder="在此輸入您針對此行程的補充紀錄..."
-                style={{
-                  width: '100%',
-                  height: '120px',
-                  background: 'rgba(15, 23, 42, 0.8)',
-                  border: '1px solid var(--border-glass-bright)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '12px',
-                  color: 'var(--text-main)',
-                  fontSize: '13px',
-                  lineHeight: '1.6',
-                  resize: 'none',
-                  outline: 'none'
-                }}
-              />
-            </div>
-
-            {/* Actions */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
-              <button className="btn-secondary" onClick={() => setSelectedEvent(null)}>取消</button>
-              <button className="btn-primary" onClick={handleSaveAsNoteFile} style={{ background: 'linear-gradient(135deg, var(--accent-cyan), #0284c7)' }}>
-                <FilePlus size={16} /> 儲存並建立實體 .md 筆記
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
+      {/* Floating Centered Glassmorphism Modal for Event Note Inspection (Extracted Reusable Component) */}
+      <EventNoteModal
+        isOpen={!!selectedEvent}
+        event={selectedEvent}
+        onClose={() => setSelectedEvent(null)}
+        onSaveNote={onSaveNewNote}
+      />
 
     </div>
   );

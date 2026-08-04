@@ -3,10 +3,9 @@ const router = express.Router();
 const fs = require('fs/promises');
 const path = require('path');
 
-// Resolve root notes directory
+// Resolve root notes directory (Fixed absolute path to project root/notes regardless of process.cwd)
 const getNotesBaseDir = () => {
-  const dir = process.env.NOTES_DIR || path.join(__dirname, '../../notes');
-  return path.resolve(dir);
+  return path.resolve(__dirname, '../../notes');
 };
 
 // Helper: Recursively build file tree
@@ -65,14 +64,59 @@ router.get('/file', async (req, res) => {
     if (!relPath) return res.status(400).json({ error: 'Missing relPath parameter' });
 
     const baseDir = getNotesBaseDir();
-    const filePath = path.resolve(baseDir, relPath);
+    let filePath = path.resolve(baseDir, relPath);
 
     // Security check: ensure target path is within baseDir
     if (!filePath.startsWith(baseDir)) {
       return res.status(403).json({ error: 'Access denied outside notes directory' });
     }
 
-    const content = await fs.readFile(filePath, 'utf-8');
+    let content;
+    try {
+      content = await fs.readFile(filePath, 'utf-8');
+    } catch (readErr) {
+      // macOS NFD/NFC 容錯與核心行程標題標準化查詢
+      if (readErr.code === 'ENOENT') {
+        const dir = path.dirname(filePath);
+        const targetName = path.basename(filePath).normalize('NFC');
+        try {
+          const files = await fs.readdir(dir);
+          let matched = files.find(f => f.normalize('NFC') === targetName);
+          if (!matched) {
+            // 取出核心行程標題並強制轉換為 NFC 進行子字串比對（消除 macOS NFD/NFC 及前綴差異）
+            const cleanTitle = (str) => {
+              return str
+                .replace(/\.md$/i, '')
+                .replace(/AI_?助理行事曆/gi, '')
+                .replace(/Google/gi, '')
+                .replace(/meeting/gi, '')
+                .replace(/\d{4}-\d{2}-\d{2}/g, '')
+                .replace(/[_\-\s+]/g, '')
+                .normalize('NFC')
+                .trim();
+            };
+            const targetPure = cleanTitle(targetName);
+            if (targetPure && targetPure.length > 0) {
+              matched = files.find(f => {
+                const fPure = cleanTitle(f);
+                return fPure && (fPure.includes(targetPure) || targetPure.includes(fPure));
+              });
+            }
+          }
+          if (matched) {
+            filePath = path.join(dir, matched);
+            content = await fs.readFile(filePath, 'utf-8');
+          } else {
+            throw readErr;
+          }
+        } catch (dirErr) {
+          throw readErr;
+        }
+      } else {
+        throw readErr;
+      }
+    }
+
     res.json({ success: true, path: relPath, content });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

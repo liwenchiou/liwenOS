@@ -35,7 +35,8 @@ class CalendarController {
 
   async getEvents(req, res, next) {
     try {
-      const { isLive, events } = await calendarService.getEvents();
+      const { year, month } = req.query;
+      const { isLive, events } = await calendarService.getEvents(year, month);
       return successResponse(res, { isLive, totalEvents: events.length, events }, 'Calendar events fetched');
     } catch (err) {
       next(err);

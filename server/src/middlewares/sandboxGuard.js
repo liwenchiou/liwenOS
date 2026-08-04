@@ -1,10 +1,9 @@
 const path = require('path');
 const { errorResponse } = require('../utils/response');
 
-// Resolve root notes directory
+// Resolve root notes directory (Fixed absolute path to project root/notes regardless of process.cwd)
 const getNotesBaseDir = () => {
-  const dir = process.env.NOTES_DIR || path.join(__dirname, '../../../notes');
-  return path.resolve(dir);
+  return path.resolve(__dirname, '../../../notes');
 };
 
 /**

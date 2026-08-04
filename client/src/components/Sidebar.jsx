@@ -96,7 +96,6 @@ export default function Sidebar({ activeTab, setActiveTab }) {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                title={isCollapsed ? item.label : ''}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -110,13 +109,19 @@ export default function Sidebar({ activeTab, setActiveTab }) {
                   fontWeight: isActive ? '600' : '500',
                   fontSize: '13px',
                   transition: 'var(--transition-fast)',
-                  borderLeft: (!isCollapsed && isActive) ? '3px solid var(--primary-linear)' : '3px solid transparent'
+                  borderLeft: (!isCollapsed && isActive) ? '3px solid var(--primary-linear)' : '3px solid transparent',
+                  position: 'relative'
                 }}
+                className="sidebar-nav-btn"
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'center' }}>
                   <Icon size={18} color={isActive ? '#a5b4fc' : 'var(--text-dim)'} style={{ flexShrink: 0 }} />
                   {!isCollapsed && <span style={{ whiteSpace: 'nowrap' }}>{item.label}</span>}
                 </div>
+                {/* 收合模式下的自訂 Tooltip 浮窗 */}
+                {isCollapsed && (
+                  <span className="sidebar-tooltip">{item.label}</span>
+                )}
               </button>
             );
           })}

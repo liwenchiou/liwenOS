@@ -2,10 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { FileSpreadsheet, Calendar, CheckSquare, FilePlus, Sparkles, Clock, Copy, ExternalLink, X, Save, Check } from 'lucide-react';
 
 export default function ReportView({ events, notesTree, onSaveNewNote, showToast }) {
-  const [markdownTasks, setMarkdownTasks] = useState([]);
   const [googleSheetTasks, setGoogleSheetTasks] = useState([]);
   const [reflectionText, setReflectionText] = useState('');
-  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
 
   // Modal for inspecting/creating event meeting note from Daily Report
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -26,7 +24,7 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
     return d.getFullYear() >= 2000 && d.toDateString() === todayStrDate;
   });
 
-  // 1. Fetch Google Sheet Todos
+  // 從後端 API 撈取 Google Sheet 待辦事項
   useEffect(() => {
     const fetchSheetTodos = async () => {
       try {
@@ -39,53 +37,6 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
     };
     fetchSheetTodos();
   }, []);
-
-  // 2. Helper: Extract pending tasks (- [ ]) from local markdown notes
-  useEffect(() => {
-    const fetchAllMarkdownTasks = async () => {
-      setIsLoadingTasks(true);
-      const flattenFiles = (nodes) => {
-        let files = [];
-        if (!nodes) return files;
-        for (const n of nodes) {
-          if (n.type === 'file') files.push(n.path);
-          else if (n.children) files = files.concat(flattenFiles(n.children));
-        }
-        return files;
-      };
-
-      const filePaths = flattenFiles(notesTree);
-      let aggregatedTasks = [];
-
-      for (const relPath of filePaths) {
-        try {
-          const res = await fetch(`/api/notes/file?relPath=${encodeURIComponent(relPath)}`);
-          const data = await res.json();
-          const content = (data && data.data) ? data.data.content : data.content;
-          if ((data.status === 'success' || data.success) && content) {
-            const lines = content.split('\n');
-            lines.forEach((line, idx) => {
-              if (line.includes('- [ ]')) {
-                const taskText = line.replace(/- \[[ ]\]/, '').trim();
-                if (taskText) {
-                  aggregatedTasks.push({
-                    file: relPath,
-                    lineNum: idx + 1,
-                    text: taskText
-                  });
-                }
-              }
-            });
-          }
-        } catch (err) {}
-      }
-
-      setMarkdownTasks(aggregatedTasks);
-      setIsLoadingTasks(false);
-    };
-
-    fetchAllMarkdownTasks();
-  }, [notesTree]);
 
   useEffect(() => {
     if (!selectedEvent) return undefined;
@@ -152,22 +103,29 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
     }
     md += `\n`;
 
-    md += `## 🚀 Google Sheet 待辦事項 (${googleSheetTasks.length} 項)\n`;
-    if (googleSheetTasks.length === 0) {
-      md += `- 所有 Google Sheet 待辦皆已完成！\n`;
-    } else {
-      googleSheetTasks.forEach(task => {
-        md += `- [${task.completed ? 'x' : ' '}] ${task.text} ${task.targetDate ? `(${task.targetDate})` : ''}\n`;
-      });
-    }
-    md += `\n`;
+    const reportSheetTasks = googleSheetTasks.filter(task => {
+      if (task.completed) return false;
+      if (task.targetDate && task.targetDate.trim() !== '') {
+        const normDate = task.targetDate.trim().replace(/\//g, '-');
+        if (normDate.startsWith(todayYYYYMMDD)) return true;
+        const d = new Date(task.targetDate);
+        if (!isNaN(d.getTime())) {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${y}-${m}-${day}` === todayYYYYMMDD;
+        }
+        return false;
+      }
+      return true;
+    });
 
-    md += `## 📝 本地筆記未完成待辦 (${markdownTasks.length} 項)\n`;
-    if (markdownTasks.length === 0) {
-      md += `- 本地筆記庫中無待辦事項\n`;
+    md += `## 🚀 Google Sheet 今日待辦事項 (${reportSheetTasks.length} 項)\n`;
+    if (reportSheetTasks.length === 0) {
+      md += `- 所有 Google Sheet 今日待辦皆已完成！\n`;
     } else {
-      markdownTasks.forEach(task => {
-        md += `- [ ] **[${task.file}]** ${task.text}\n`;
+      reportSheetTasks.forEach(task => {
+        md += `- [ ] ${task.text} ${task.targetDate ? `(${task.targetDate})` : ''}\n`;
       });
     }
     md += `\n`;
@@ -187,19 +145,33 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
     try {
       const saved = await Promise.resolve(onSaveNewNote(fileName, mdContent, { silent: true }));
       if (showToast) {
-        showToast(
-          saved ? `已匯出日報：./notes/${fileName}` : '日報匯出失敗',
-          saved ? 'success' : 'error'
-        );
+        showToast('日報已成功儲存至 ./notes/daily/', 'success');
       }
     } catch (err) {
       if (showToast) {
-        showToast('日報匯出失敗: ' + err.message, 'error');
+        showToast('匯出日報失敗', 'error');
       }
     }
   };
 
-  const pendingSheetTasks = googleSheetTasks.filter(t => !t.completed);
+  const isTodaySheetTask = (t) => {
+    if (t.completed) return false;
+    if (t.targetDate && t.targetDate.trim() !== '') {
+      const normDate = t.targetDate.trim().replace(/\//g, '-');
+      if (normDate.startsWith(todayYYYYMMDD)) return true;
+      const d = new Date(t.targetDate);
+      if (!isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}` === todayYYYYMMDD;
+      }
+      return false;
+    }
+    return true;
+  };
+
+  const pendingSheetTasks = googleSheetTasks.filter(isTodaySheetTask);
 
   return (
     <div style={{ flex: 1, padding: '28px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -211,7 +183,7 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
             <FileSpreadsheet size={26} color="var(--accent-emerald)" /> 今日自動生成日報 ({todayYYYYMMDD})
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '4px' }}>
-            自動交叉整合今日行事曆行程、Google Sheet 待辦事項與本地 Markdown 筆記庫
+            自動整合今日行事曆行程與 Google Sheet 待辦事項
           </p>
         </div>
 
@@ -278,51 +250,43 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
           </div>
         </div>
 
-        {/* Column 2: Google Sheet & Local Markdown Tasks */}
+        {/* Column 2: Google Sheet 待辦事項 */}
         <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{ background: 'rgba(245, 158, 11, 0.15)', padding: '8px', borderRadius: '8px', flexShrink: 0 }}>
               <CheckSquare size={20} color="var(--accent-amber)" />
             </div>
             <div>
-              <h3 style={{ fontSize: '15px', fontWeight: '700' }}>🚀 今日未完成待辦彙整</h3>
+              <h3 style={{ fontSize: '15px', fontWeight: '700' }}>🚀 Google Sheet 未完成待辦</h3>
               <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-                Google Sheet ({pendingSheetTasks.length}) + 本地筆記 ({markdownTasks.length})
+                共 {pendingSheetTasks.length} 項未完成
               </span>
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '360px', overflowY: 'auto' }}>
-            {pendingSheetTasks.length === 0 && markdownTasks.length === 0 ? (
+            {pendingSheetTasks.length === 0 ? (
               <p style={{ color: 'var(--accent-emerald)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>
-                🎉 太棒了！目前全數待辦事項皆已完成！
+                🎉 太棒了！Google Sheet 待辦事項皆已完成！
               </p>
             ) : (
-              <>
-                {/* Google Sheet Unfinished Tasks */}
-                {pendingSheetTasks.map((task) => (
-                  <div key={`sheet-${task.id}`} className="glass-card" style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                      <span style={{ fontSize: '13px', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>☐ {task.text}</span>
-                    </div>
-                    <span style={{ fontSize: '10px', color: 'var(--accent-emerald)', background: 'rgba(16, 185, 129, 0.15)', padding: '2px 6px', borderRadius: '4px', flexShrink: 0 }}>
-                      Google Sheet
+              pendingSheetTasks.map((task) => (
+                <div key={`sheet-${task.id}`} className="glass-card" style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minWidth: 0, gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: '13px', fontWeight: '500', whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: '1.4' }}>
+                      ☐ {task.text}
+                      {task.targetDate && (
+                        <span style={{ fontSize: '11px', color: 'var(--accent-cyan)', background: 'rgba(6, 182, 212, 0.12)', padding: '2px 6px', borderRadius: '4px', marginLeft: '8px', display: 'inline-block' }}>
+                          📅 {task.targetDate}
+                        </span>
+                      )}
                     </span>
                   </div>
-                ))}
-
-                {/* Local Markdown Notes Tasks */}
-                {markdownTasks.map((task, idx) => (
-                  <div key={`md-${idx}`} className="glass-card" style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                      <span style={{ fontSize: '13px', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>☐ {task.text}</span>
-                    </div>
-                    <span style={{ fontSize: '10px', color: 'var(--accent-cyan)', background: 'rgba(6, 182, 212, 0.15)', padding: '2px 6px', borderRadius: '4px', flexShrink: 0 }}>
-                      {task.file}
-                    </span>
-                  </div>
-                ))}
-              </>
+                  <span style={{ fontSize: '10px', color: 'var(--accent-emerald)', background: 'rgba(16, 185, 129, 0.15)', padding: '2px 6px', borderRadius: '4px', flexShrink: 0 }}>
+                    Google Sheet
+                  </span>
+                </div>
+              ))
             )}
           </div>
         </div>

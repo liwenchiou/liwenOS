@@ -42,8 +42,51 @@ class NoteRepository {
 
   async readFile(relPath) {
     const baseDir = getNotesBaseDir();
-    const filePath = path.resolve(baseDir, relPath);
-    return await fs.readFile(filePath, 'utf-8');
+    let filePath = path.resolve(baseDir, relPath);
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (readErr) {
+      // macOS NFD/NFC 容錯與核心行程標題標準化查詢
+      if (readErr.code === 'ENOENT') {
+        const dir = path.dirname(filePath);
+        const targetName = path.basename(filePath).normalize('NFC');
+        try {
+          const files = await fs.readdir(dir);
+          let matched = files.find(f => f.normalize('NFC') === targetName);
+          if (!matched) {
+            // 取出核心行程標題並強制轉換為 NFC 進行子字串比對（消除 macOS NFD/NFC 及前綴差異）
+            const cleanTitle = (str) => {
+              return str
+                .replace(/\.md$/i, '')
+                .replace(/AI_?助理行事曆/gi, '')
+                .replace(/Google/gi, '')
+                .replace(/meeting/gi, '')
+                .replace(/\d{4}-\d{2}-\d{2}/g, '')
+                .replace(/[_\-\s+]/g, '')
+                .normalize('NFC')
+                .trim();
+            };
+            const targetPure = cleanTitle(targetName);
+            if (targetPure && targetPure.length > 0) {
+              matched = files.find(f => {
+                const fPure = cleanTitle(f);
+                return fPure && (fPure.includes(targetPure) || targetPure.includes(fPure));
+              });
+            }
+          }
+          if (matched) {
+            filePath = path.join(dir, matched);
+            return await fs.readFile(filePath, 'utf-8');
+          } else {
+            throw readErr;
+          }
+        } catch (dirErr) {
+          throw readErr;
+        }
+      } else {
+        throw readErr;
+      }
+    }
   }
 
   async writeFile(relPath, content) {

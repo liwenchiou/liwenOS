@@ -18,13 +18,15 @@ export default function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalInitialTitle, setModalInitialTitle] = useState('');
 
-  // 全域浮動 Toast 通知狀態
-  const [toast, setToast] = useState({ message: '', type: 'success', visible: false });
+  // 全域浮動 Toast 通知狀態（堆疊式陣列）
+  const [toasts, setToasts] = useState([]);
+  const toastIdRef = React.useRef(0);
 
   const showToast = (message, type = 'success') => {
-    setToast({ message, type, visible: true });
+    const id = ++toastIdRef.current;
+    setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
-      setToast(prev => ({ ...prev, visible: false }));
+      setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
   };
 
@@ -32,10 +34,14 @@ export default function App() {
   const isSuccess = (resData) => resData && (resData.status === 'success' || resData.success === true);
   const getPayload = (resData) => (resData && resData.data) ? resData.data : resData;
 
-  // 1. 從後端 API 撈取 Google Calendar 行事曆事件
-  const fetchCalendarEvents = async () => {
+  // 1. 從後端 API 撈取 Google Calendar 行事曆事件（支援指定年月）
+  const fetchCalendarEvents = async (year, month) => {
     try {
-      const res = await fetch('/api/calendar/events');
+      let url = '/api/calendar/events';
+      if (year != null && month != null) {
+        url += `?year=${year}&month=${month}`;
+      }
+      const res = await fetch(url);
       const data = await res.json();
       if (isSuccess(data)) {
         const payload = getPayload(data);
@@ -174,29 +180,42 @@ export default function App() {
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
       
-      {/* 全域浮動 Toast 通知橫幅 */}
-      {toast.visible && (
+      {/* 全域浮動 Toast 通知堆疊橫幅 */}
+      {toasts.length > 0 && (
         <div style={{
           position: 'fixed',
           top: '24px',
           right: '24px',
-          background: toast.type === 'error' ? 'rgba(239, 68, 68, 0.95)' : 'rgba(16, 185, 129, 0.95)',
-          color: '#ffffff',
-          padding: '12px 20px',
-          borderRadius: 'var(--radius-md)',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
-          backdropFilter: 'blur(10px)',
-          zIndex: 2000,
-          fontSize: '14px',
-          fontWeight: '600',
           display: 'flex',
-          alignItems: 'center',
+          flexDirection: 'column',
           gap: '10px',
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          animation: 'fadeIn 0.2s ease-in-out'
+          zIndex: 2000,
+          pointerEvents: 'none'
         }}>
-          {toast.type === 'error' ? <AlertCircle size={18} /> : <CheckCircle size={18} />}
-          <span>{toast.message}</span>
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              style={{
+                background: t.type === 'error' ? 'rgba(239, 68, 68, 0.95)' : 'rgba(16, 185, 129, 0.95)',
+                color: '#ffffff',
+                padding: '12px 20px',
+                borderRadius: 'var(--radius-md)',
+                boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+                backdropFilter: 'blur(10px)',
+                fontSize: '14px',
+                fontWeight: '600',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                animation: 'fadeIn 0.2s ease-in-out',
+                pointerEvents: 'auto'
+              }}
+            >
+              {t.type === 'error' ? <AlertCircle size={18} /> : <CheckCircle size={18} />}
+              <span>{t.message}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -220,6 +239,7 @@ export default function App() {
             events={events}
             onOpenCreateModal={() => handleOpenCreateModalWithTitle('')}
             onSaveNewNote={handleSaveFile}
+            onFetchEvents={fetchCalendarEvents}
             showToast={showToast}
           />
         )}

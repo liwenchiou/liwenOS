@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Calendar, FileText, Plus, FileEdit, CheckCircle2, Clock, Check, Sparkles, X, FilePlus, RefreshCw, Trash2, Eye, EyeOff } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
+import EventNoteModal from './EventNoteModal';
 
 export default function DashboardView({ events, notesTree, onOpenCreateModal, onSaveNewNote, showToast }) {
   const [scratchpadText, setScratchpadText] = useState('');
@@ -12,7 +13,6 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
 
   // 行程詳情 / 產出會議筆記 Modal 狀態
   const [selectedEvent, setSelectedEvent] = useState(null);
-  const [extraNotesText, setExtraNotesText] = useState('');
 
   const isFirstRender = useRef(true);
 
@@ -144,63 +144,50 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
     return () => clearTimeout(timer);
   }, [scratchpadText]);
 
-  useEffect(() => {
-    if (!selectedEvent) return undefined;
-
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setSelectedEvent(null);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEvent]);
-
   const handleEventClick = (evt) => {
     setSelectedEvent(evt);
-    setExtraNotesText('');
-  };
-
-  const handleCreateNoteFromEvent = () => {
-    if (!selectedEvent) return;
-
-    const timeString = `${new Date(selectedEvent.start).toLocaleString()} - ${new Date(selectedEvent.end).toLocaleTimeString()}`;
-    
-    let mdContent = `# 📌 會議記錄：${selectedEvent.summary}\n\n`;
-    mdContent += `- **行程名稱**：${selectedEvent.summary}\n`;
-    mdContent += `- **日期時間**：${timeString}\n`;
-    mdContent += `- **來源**：${selectedEvent.source || 'Google Calendar'}\n`;
-    if (selectedEvent.location) {
-      mdContent += `- **地點/連結**：${selectedEvent.location}\n`;
-    }
-    mdContent += `\n---\n\n## 💡 補充紀錄與觀察\n`;
-    mdContent += extraNotesText.trim() ? extraNotesText : `- (尚無補充紀錄)\n`;
-    mdContent += `\n\n## 🚀 待辦事項 (Action Items)\n- [ ] \n`;
-
-    const fileName = `daily/meeting-${selectedEvent.summary.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}.md`;
-    
-    if (onSaveNewNote) {
-      onSaveNewNote(fileName, mdContent);
-    }
-
-    setSelectedEvent(null);
-    setExtraNotesText('');
   };
 
   const nowObj = new Date();
-  const todayStrDate = nowObj.toDateString();
   const yearStr = nowObj.getFullYear();
   const monthStr = String(nowObj.getMonth() + 1).padStart(2, '0');
   const dayStr = String(nowObj.getDate()).padStart(2, '0');
-  const todayYYYYMMDD = `${yearStr}-${monthStr}-${dayStr}`;
 
-  const todayEvents = (events || []).filter(evt => {
-    if (!evt.start) return false;
-    if (typeof evt.start === 'string' && evt.start.startsWith(todayYYYYMMDD)) return true;
-    const d = new Date(evt.start);
-    return d.getFullYear() >= 2000 && d.toDateString() === todayStrDate;
-  });
+  // 檢查某行程是否落在目標日期 (支援多日跨日持續顯示)
+  const isEventOnDay = (e, targetYear, targetMonth, targetDay) => {
+    if (!e.start) return false;
+    const targetDateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+    
+    if (typeof e.start === 'string' && e.start.length === 10 && !e.start.includes('T')) {
+      const startStr = e.start;
+      const endStr = (e.end && e.end.length === 10 && !e.end.includes('T')) ? e.end : startStr;
+      if (endStr > startStr) {
+        return targetDateStr >= startStr && targetDateStr < endStr;
+      }
+      return targetDateStr === startStr;
+    }
+
+    const cellStart = new Date(targetYear, targetMonth, targetDay, 0, 0, 0, 0);
+    const cellEnd = new Date(targetYear, targetMonth, targetDay, 23, 59, 59, 999);
+
+    const evtStart = new Date(e.start);
+    const evtEnd = e.end ? new Date(e.end) : evtStart;
+    if (isNaN(evtStart.getTime())) return false;
+    const finalEnd = isNaN(evtEnd.getTime()) ? evtStart : evtEnd;
+
+    return evtStart <= cellEnd && finalEnd >= cellStart;
+  };
+
+  const todayEvents = (events || []).filter(evt => 
+    isEventOnDay(evt, nowObj.getFullYear(), nowObj.getMonth(), nowObj.getDate())
+  );
+
+  const getSourceBorderColor = (source) => {
+    const src = (source || '').toLowerCase();
+    if (src.includes('貝貝') || src.includes('beibei')) return '#fbbf24'; // 黃色
+    if (src.includes('安大') || src.includes('andal')) return '#c084fc'; // 紫色
+    return '#34d399'; // 綠色
+  };
 
   // 過濾 & 排序待辦事項：未完成在上，已完成在下
   const processedTasks = [...pendingTasks]
@@ -251,8 +238,15 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1 }}>
             {todayEvents.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-dim)', fontSize: '13px' }}>
-                今日無排定行程
+              <div style={{ textAlign: 'center', padding: '30px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                <div style={{ fontSize: '36px', opacity: 0.8 }}>☕️</div>
+                <div>
+                  <p style={{ color: 'var(--text-main)', fontSize: '14px', fontWeight: '600' }}>享受寧靜的一天</p>
+                  <p style={{ color: 'var(--text-dim)', fontSize: '12px', marginTop: '4px' }}>今日尚無排定行程，適合專注深度工作</p>
+                </div>
+                <button className="btn-secondary" onClick={onOpenCreateModal} style={{ fontSize: '12px', marginTop: '4px' }}>
+                  <Plus size={14} /> 安排一個新行程
+                </button>
               </div>
             ) : (
               todayEvents.map(evt => (
@@ -265,7 +259,7 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '4px',
-                    borderLeft: '4px solid var(--accent-cyan)',
+                    borderLeft: `4px solid ${getSourceBorderColor(evt.source)}`,
                     cursor: 'pointer',
                     transition: 'var(--transition-fast)',
                     minWidth: 0
@@ -335,6 +329,8 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
           {/* 新增待辦事項至 Google Sheet 的輸入框 */}
           <form onSubmit={handleAddGoogleSheetTask} style={{ display: 'flex', gap: '8px' }}>
             <input
+              id="new-todo-input"
+              aria-label="新增待辦事項至 Google Sheet"
               type="text"
               value={newQuickTask}
               onChange={(e) => setNewQuickTask(e.target.value)}
@@ -357,11 +353,13 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
           </form>
 
           {/* 待辦事項清單（直接來自 Google Sheet） */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '380px', overflowY: 'auto' }}>
             {isLoadingTodos ? (
-              <p style={{ color: 'var(--text-dim)', fontSize: '13px', textAlign: 'center', padding: '16px' }}>
-                載入 Google Sheet 待辦事項中...
-              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
+                <div className="skeleton-bar" style={{ height: '36px', width: '100%' }} />
+                <div className="skeleton-bar" style={{ height: '36px', width: '85%' }} />
+                <div className="skeleton-bar" style={{ height: '36px', width: '70%' }} />
+              </div>
             ) : processedTasks.length === 0 ? (
               <p style={{ color: 'var(--accent-emerald)', fontSize: '13px', textAlign: 'center', padding: '16px' }}>
                 🎉 {hideCompleted ? '目前無未完成待辦事項！' : '目前試算表中尚無待辦事項！'}
@@ -372,31 +370,32 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
                   key={task.id}
                   className="glass-card"
                   style={{
-                    padding: '8px 12px',
+                    padding: '10px 12px',
                     display: 'flex',
-                    justify: 'space-between',
-                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
                     background: task.completed ? 'rgba(15, 23, 42, 0.3)' : 'rgba(30, 41, 59, 0.6)',
                     opacity: task.completed ? 0.7 : 1,
                     borderLeft: task.completed ? '3px solid var(--text-dim)' : '3px solid var(--accent-emerald)',
-                    minWidth: 0
+                    minWidth: 0,
+                    gap: '8px'
                   }}
                 >
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', flex: 1, minWidth: 0 }}>
                     <input
                       type="checkbox"
                       checked={task.completed}
                       onChange={() => handleToggleGoogleSheetTask(task)}
-                      style={{ cursor: 'pointer', width: '16px', height: '16px', flexShrink: 0 }}
+                      style={{ cursor: 'pointer', width: '16px', height: '16px', flexShrink: 0, marginTop: '2px' }}
                     />
                     <span style={{
                       fontSize: '13px',
                       fontWeight: task.completed ? '400' : '600',
                       textDecoration: task.completed ? 'line-through' : 'none',
                       color: task.completed ? 'var(--text-dim)' : 'var(--text-main)',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis'
+                      whiteSpace: 'normal',
+                      wordBreak: 'break-word',
+                      lineHeight: '1.4'
                     }}>
                       {task.text}
                     </span>
@@ -496,87 +495,13 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
 
       </div>
 
-      {/* 浮動居中毛玻璃 Modal：行程會議筆記編輯對話框 */}
-      {selectedEvent && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(9, 13, 22, 0.75)',
-          backdropFilter: 'blur(10px)',
-          display: 'grid',
-          placeContent: 'center',
-          zIndex: 1000
-        }}>
-          <div className="glass-panel" style={{
-            width: '560px',
-            padding: '24px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
-            animation: 'fadeIn 0.2s ease-in-out'
-          }}>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Sparkles size={20} color="var(--accent-cyan)" /> 📌 行程會議筆記與紀錄
-              </h3>
-              <button type="button" onClick={() => setSelectedEvent(null)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* 行程資訊卡片 */}
-            <div className="glass-card" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(30, 41, 59, 0.7)' }}>
-              <div style={{ fontSize: '14px', fontWeight: '600' }}>
-                📌 名稱：<span style={{ color: 'var(--text-main)' }}>{selectedEvent.summary}</span>
-              </div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                🕒 時間：{new Date(selectedEvent.start).toLocaleString()} - {new Date(selectedEvent.end).toLocaleTimeString()}
-              </div>
-              {selectedEvent.location && (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  📍 地點/連結：{selectedEvent.location}
-                </div>
-              )}
-            </div>
-
-            {/* 補充紀錄輸入框 */}
-            <div>
-              <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)', marginBottom: '6px', display: 'block' }}>
-                ✍️ 補充內容 (您可以輸入會議紀錄、討論要點或隨筆)：
-              </label>
-              <textarea
-                value={extraNotesText}
-                onChange={(e) => setExtraNotesText(e.target.value)}
-                placeholder="在此輸入您針對此行程的補充紀錄..."
-                style={{
-                  width: '100%',
-                  height: '120px',
-                  background: 'rgba(15, 23, 42, 0.8)',
-                  border: '1px solid var(--border-glass-bright)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '12px',
-                  color: 'var(--text-main)',
-                  fontSize: '13px',
-                  lineHeight: '1.6',
-                  resize: 'none',
-                  outline: 'none'
-                }}
-              />
-            </div>
-
-            {/* 操作按鈕列 */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
-              <button className="btn-secondary" onClick={() => setSelectedEvent(null)}>取消</button>
-              <button className="btn-primary" onClick={handleCreateNoteFromEvent} style={{ background: 'linear-gradient(135deg, var(--accent-cyan), #0284c7)' }}>
-                <FilePlus size={16} /> 儲存並建立實體 .md 筆記
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
+      {/* 浮動居中毛玻璃 Modal：行程會議筆記編輯對話框 (抽離至共用 EventNoteModal 元件) */}
+      <EventNoteModal
+        isOpen={!!selectedEvent}
+        event={selectedEvent}
+        onClose={() => setSelectedEvent(null)}
+        onSaveNote={onSaveNewNote}
+      />
 
       {/* 毛玻璃確認 Modal：Google Sheet 待辦事項刪除確認 */}
       <ConfirmModal
