@@ -21,6 +21,10 @@ class NoteService {
     return await noteRepository.deleteItem(relPath);
   }
 
+  async renameItem(oldRelPath, newRelPath) {
+    return await noteRepository.renameItem(oldRelPath, newRelPath);
+  }
+
   // Feature: Full-text & Tag Search API
   async searchNotes(query) {
     if (!query || !query.trim()) return [];

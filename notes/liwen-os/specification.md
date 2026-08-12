@@ -1,10 +1,10 @@
 # 🚀 liwen OS - 個人數位大腦與行程管理系統規格書 (System Specification)
 
-> **版本**：v1.0.0  
-> **更新日期**：2026-08-03  
+> **版本**：v1.0.0
+> **更新日期**：2026-08-03
 > **系統定位**：專為高效工作者打造的雙軌（Docker / Local）個人數位大腦 (Second Brain)，整合 Google 行事曆、iCloud 日曆訂閱與 Google Sheet 待辦事項。
 
----
+- --
 
 ## 🏛️ 1. 系統整體架構 (System Architecture)
 
@@ -16,7 +16,7 @@
   - **Google Sheet 直連 (To-Dos 分頁)**：`SPREADSHEET_ID=1VMHoGReOtWN-TB9N38U-QXowb7Xiiyna-AHclq2kO_o`
   - **Google Calendar API & iCloud ICS 訂閱**：雙向行程連動與自動串接
 
----
+- --
 
 ## 🌟 2. 核心功能模組 (Core Modules)
 
@@ -51,7 +51,7 @@
 - **自動交叉整合**：自動匯集「今日行事曆」、「Google Sheet 待辦」、「本地 Markdown 未完成事項」與「今日反思心得」。
 - **實體 .md 日報匯出**：一鍵生成並儲存至 `./notes/daily/daily-report-YYYY-MM-DD.md`。
 
----
+- --
 
 ## 🎨 3. UI/UX 設計系統 (Linear Dark Obsidian Style)
 
@@ -60,7 +60,7 @@
 - **響應式佈局 (RWD)**：全站 2x2 網格自動縮放 (`minmax(320px, 1fr)`)，中小螢幕不掉卡片。
 - **動態收合側邊欄**：支援 `230px` ⟷ `64px` 平滑動畫縮放，極致放大主工作區。
 
----
+- --
 
 ## 🛠️ 4. 環境與 API 端點規範
 

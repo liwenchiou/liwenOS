@@ -42,6 +42,10 @@ export default function EventNoteModal({ isOpen, event, onClose, onSaveNote }) {
   const [extraNotesText, setExtraNotesText] = useState('');
   const [existingFilePath, setExistingFilePath] = useState(null);
   const [isLoadingNote, setIsLoadingNote] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState(''); // '' | 'saving' | 'saved'
+
+  const initialTextRef = React.useRef('');
+  const isInitialLoadRef = React.useRef(true);
 
   useEffect(() => {
     if (isOpen && event) {
@@ -63,16 +67,27 @@ export default function EventNoteModal({ isOpen, event, onClose, onSaveNote }) {
       ].filter(Boolean)));
 
       setIsLoadingNote(true);
+      setAutoSaveStatus('');
+      isInitialLoadRef.current = true;
 
       const loadContent = (data, matchedPath) => {
         setExistingFilePath(matchedPath);
-        const match = data.content.match(/## 💡 補充紀錄與觀察\s+([\s\S]*?)(?=\n## 🚀|\n---|$)/);
-        if (match && match[1]) {
-          const parsed = match[1].trim();
-          setExtraNotesText(parsed === '- (尚無補充紀錄)' ? '' : parsed);
-        } else {
-          setExtraNotesText(data.content);
+        const contentStr = (data && data.data) ? data.data.content : data.content;
+        if (!contentStr) {
+          setExtraNotesText('');
+          initialTextRef.current = '';
+          return;
         }
+        const match = contentStr.match(/## 💡 補充紀錄與觀察\s+([\s\S]*?)(?=\n## 🚀|\n---|$)/);
+        let parsed = '';
+        if (match && match[1]) {
+          parsed = match[1].trim();
+          parsed = parsed === '- (尚無補充紀錄)' ? '' : parsed;
+        } else {
+          parsed = contentStr;
+        }
+        setExtraNotesText(parsed);
+        initialTextRef.current = parsed;
       };
 
       const tryFetchCandidates = async () => {
@@ -81,7 +96,8 @@ export default function EventNoteModal({ isOpen, event, onClose, onSaveNote }) {
             const res = await fetch(`/api/notes/file?relPath=${encodeURIComponent(relPath)}`);
             if (res.ok) {
               const data = await res.json();
-              if (data && data.content) {
+              const contentStr = (data && data.data) ? data.data.content : data.content;
+              if (contentStr) {
                 loadContent(data, relPath);
                 return;
               }
@@ -92,33 +108,64 @@ export default function EventNoteModal({ isOpen, event, onClose, onSaveNote }) {
         }
         setExistingFilePath(null);
         setExtraNotesText('');
+        initialTextRef.current = '';
       };
 
       tryFetchCandidates().finally(() => {
         setIsLoadingNote(false);
+        isInitialLoadRef.current = false;
       });
     } else {
       setExtraNotesText('');
       setExistingFilePath(null);
+      initialTextRef.current = '';
+      setAutoSaveStatus('');
+      isInitialLoadRef.current = true;
     }
   }, [isOpen, event]);
 
+  // 防抖自動保存 (500ms 停止輸入後自動同步寫入 .md 檔案)
   useEffect(() => {
-    if (!isOpen) return undefined;
+    if (!isOpen || !event || isLoadingNote || isInitialLoadRef.current) return;
+    if (extraNotesText === initialTextRef.current) return;
 
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        onClose();
+    const timer = setTimeout(async () => {
+      setAutoSaveStatus('saving');
+      const timeString = formatEventTimeRange(event);
+      let mdContent = `# 📌 會議記錄：${event.summary}\n\n`;
+      mdContent += `- **行程名稱**：${event.summary}\n`;
+      mdContent += `- **日期時間**：${timeString}\n`;
+      mdContent += `- **來源**：${event.source || 'Google Calendar'}\n`;
+      if (event.location) {
+        mdContent += `- **地點/連結**：${event.location}\n`;
       }
-    };
+      mdContent += `\n---\n\n## 💡 補充紀錄與觀察\n`;
+      mdContent += extraNotesText.trim() ? extraNotesText : `- (尚無補充紀錄)\n`;
+      mdContent += `\n\n## 🚀 待辦事項 (Action Items)\n- [ ] \n`;
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+      const fileName = existingFilePath || getEventNoteFileName(event);
+      if (onSaveNote) {
+        await Promise.resolve(onSaveNote(fileName, mdContent, { silent: true }));
+        setExistingFilePath(fileName);
+        initialTextRef.current = extraNotesText;
+        setAutoSaveStatus('saved');
+      }
+    }, 500);
 
-  if (!isOpen || !event) return null;
+    return () => clearTimeout(timer);
+  }, [extraNotesText, isOpen, event, isLoadingNote, existingFilePath, onSaveNote]);
 
-  const handleSaveAsNoteFile = () => {
+  // 儲存完成後 2.5 秒自動清除視覺提示，保持介面乾淨
+  useEffect(() => {
+    if (autoSaveStatus === 'saved') {
+      const t = setTimeout(() => setAutoSaveStatus(''), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [autoSaveStatus]);
+
+  // 關閉或離開前的保存檢查
+  const saveCurrentNote = async (silent = true) => {
+    if (!event || !onSaveNote) return;
     const timeString = formatEventTimeRange(event);
 
     let mdContent = `# 📌 會議記錄：${event.summary}\n\n`;
@@ -132,13 +179,34 @@ export default function EventNoteModal({ isOpen, event, onClose, onSaveNote }) {
     mdContent += extraNotesText.trim() ? extraNotesText : `- (尚無補充紀錄)\n`;
     mdContent += `\n\n## 🚀 待辦事項 (Action Items)\n- [ ] \n`;
 
-    const fileName = getEventNoteFileName(event);
-    if (onSaveNote) {
-      onSaveNote(fileName, mdContent);
-    }
+    const fileName = existingFilePath || getEventNoteFileName(event);
+    await Promise.resolve(onSaveNote(fileName, mdContent, { silent }));
+    setExistingFilePath(fileName);
+    initialTextRef.current = extraNotesText;
+    setAutoSaveStatus('saved');
+  };
 
+  const handleCloseModal = async () => {
+    if (extraNotesText !== initialTextRef.current) {
+      await saveCurrentNote(true);
+    }
     onClose();
   };
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        handleCloseModal();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, extraNotesText, event, existingFilePath, onSaveNote]);
+
+  if (!isOpen || !event) return null;
 
   return (
     <div style={{
@@ -164,26 +232,10 @@ export default function EventNoteModal({ isOpen, event, onClose, onSaveNote }) {
           <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Sparkles size={20} color="var(--accent-cyan)" /> 📌 行程會議筆記與紀錄
           </h3>
-          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>
+          <button type="button" onClick={handleCloseModal} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>
             <X size={20} />
           </button>
         </div>
-
-        {existingFilePath && (
-          <div style={{
-            fontSize: '12px',
-            color: 'var(--accent-cyan)',
-            background: 'rgba(6, 182, 212, 0.12)',
-            border: '1px solid rgba(6, 182, 212, 0.35)',
-            padding: '8px 12px',
-            borderRadius: 'var(--radius-sm)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}>
-            ✅ 此行程已關聯筆記：<strong>{existingFilePath}</strong>（已自動載入內容）
-          </div>
-        )}
 
         {/* 行程資訊卡片 */}
         <div className="glass-card" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(30, 41, 59, 0.7)' }}>
@@ -226,12 +278,25 @@ export default function EventNoteModal({ isOpen, event, onClose, onSaveNote }) {
           />
         </div>
 
-        {/* 操作按鈕列 */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
-          <button type="button" className="btn-secondary" onClick={onClose}>取消</button>
-          <button type="button" className="btn-primary" onClick={handleSaveAsNoteFile} style={{ background: 'linear-gradient(135deg, var(--accent-cyan), #0284c7)' }}>
-            <FilePlus size={16} /> {existingFilePath ? '儲存並更新 .md 筆記' : '儲存並建立實體 .md 筆記'}
-          </button>
+        {/* 操作按鈕列與自動儲存指示 */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
+          <div style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {autoSaveStatus === 'saving' && (
+              <span style={{ color: 'var(--accent-amber)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                ⏳ 雲端自動保存中...
+              </span>
+            )}
+            {autoSaveStatus === 'saved' && (
+              <span style={{ color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                ☁️ ✅ 內容已於本地同步保存
+              </span>
+            )}
+          </div>
+          <div>
+            <button type="button" className="btn-secondary" onClick={handleCloseModal}>
+              關閉
+            </button>
+          </div>
         </div>
 
       </div>

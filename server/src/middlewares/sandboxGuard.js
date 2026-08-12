@@ -10,14 +10,19 @@ const getNotesBaseDir = () => {
  * Middleware: CWE-22 Path Traversal Sandbox Guard
  */
 function sandboxGuard(req, res, next) {
-  const relPath = req.query.relPath || req.body.relPath;
-  
-  if (relPath) {
-    const baseDir = getNotesBaseDir();
-    const targetPath = path.resolve(baseDir, relPath);
+  const pathsToCheck = [
+    req.query.relPath || req.body.relPath,
+    req.body.oldPath,
+    req.body.newPath
+  ].filter(Boolean);
 
-    if (!targetPath.startsWith(baseDir)) {
-      return errorResponse(res, 'Access denied: Target path outside notes directory', 403);
+  if (pathsToCheck.length > 0) {
+    const baseDir = getNotesBaseDir();
+    for (const p of pathsToCheck) {
+      const targetPath = path.resolve(baseDir, p);
+      if (!targetPath.startsWith(baseDir)) {
+        return errorResponse(res, 'Access denied: Target path outside notes directory', 403);
+      }
     }
   }
 

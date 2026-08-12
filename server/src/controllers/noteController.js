@@ -59,6 +59,18 @@ class NoteController {
     }
   }
 
+  async renameItem(req, res, next) {
+    try {
+      const { oldPath, newPath } = req.body;
+      if (!oldPath || !newPath) return errorResponse(res, 'Missing oldPath or newPath', 400);
+
+      await noteService.renameItem(oldPath, newPath);
+      return successResponse(res, { oldPath, newPath }, 'Renamed successfully');
+    } catch (err) {
+      next(err);
+    }
+  }
+
   // Feature: Search API
   async searchNotes(req, res, next) {
     try {

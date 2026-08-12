@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FileSpreadsheet, Calendar, CheckSquare, FilePlus, Sparkles, Clock, Copy, ExternalLink, X, Save, Check } from 'lucide-react';
+import EventNoteModal from './EventNoteModal';
 
 export default function ReportView({ events, notesTree, onSaveNewNote, showToast }) {
   const [googleSheetTasks, setGoogleSheetTasks] = useState([]);
@@ -7,8 +8,65 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
 
   // Modal for inspecting/creating event meeting note from Daily Report
   const [selectedEvent, setSelectedEvent] = useState(null);
-  const [eventNoteContent, setEventNoteContent] = useState('');
-  const [noteExists, setNoteExists] = useState(false);
+
+  // 遍歷筆記樹找尋是否存在與此行程連動的 MD 檔案路徑
+  const findNotePathForEvent = (evt, tree) => {
+    if (!evt || !tree || !Array.isArray(tree)) return null;
+    const d = new Date(evt.start);
+    const dateStr = !isNaN(d.getTime())
+      ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      : (typeof evt.start === 'string' ? evt.start.substring(0, 10) : 'unknown');
+    const summaryStr = evt.summary ? evt.summary.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_') : '未命名';
+    const sourceStr = (evt.source || 'Google').replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '');
+    const safeId = evt.id ? String(evt.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '';
+
+    const possibleNames = [
+      `${sourceStr}_${dateStr}_${summaryStr}.md`,
+      `AI助理行事曆_${dateStr}_${summaryStr}.md`,
+      `Google_${dateStr}_${summaryStr}.md`,
+      `AI_助理行事曆_${dateStr}_${summaryStr}.md`,
+      `meeting-${summaryStr}.md`,
+      safeId ? `${safeId}.md` : null
+    ].filter(Boolean);
+
+    const cleanTitle = (str) => {
+      return str
+        .replace(/\.md$/i, '')
+        .replace(/AI_?助理行事曆/gi, '')
+        .replace(/Google/gi, '')
+        .replace(/meeting/gi, '')
+        .replace(/\d{4}-\d{2}-\d{2}/g, '')
+        .replace(/[_\-\s+]/g, '')
+        .normalize('NFC')
+        .trim();
+    };
+    const targetPure = cleanTitle(summaryStr);
+
+    let foundPath = null;
+    const traverse = (nodes) => {
+      for (const node of nodes) {
+        if (foundPath) return;
+        if (node.type === 'file') {
+          const nameNFC = node.name.normalize('NFC');
+          if (possibleNames.includes(nameNFC)) {
+            foundPath = node.path;
+            return;
+          }
+          if (targetPure && targetPure.length > 0) {
+            const fPure = cleanTitle(nameNFC);
+            if (fPure && (fPure === targetPure || fPure.includes(targetPure) || targetPure.includes(fPure))) {
+              foundPath = node.path;
+              return;
+            }
+          }
+        } else if (node.type === 'directory' && node.children) {
+          traverse(node.children);
+        }
+      }
+    };
+    traverse(tree);
+    return foundPath;
+  };
 
   const nowObj = new Date();
   const todayStrDate = nowObj.toDateString();
@@ -19,9 +77,16 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
 
   const todayEvents = (events || []).filter(evt => {
     if (!evt.start) return false;
-    if (typeof evt.start === 'string' && evt.start.startsWith(todayYYYYMMDD)) return true;
-    const d = new Date(evt.start);
-    return d.getFullYear() >= 2000 && d.toDateString() === todayStrDate;
+    
+    // 當天 00:00:00 ~ 23:59:59 的時間範圍
+    const todayStart = new Date(nowObj.getFullYear(), nowObj.getMonth(), nowObj.getDate()).getTime();
+    const todayEnd = new Date(nowObj.getFullYear(), nowObj.getMonth(), nowObj.getDate(), 23, 59, 59, 999).getTime();
+
+    const evtStart = new Date(evt.start).getTime();
+    const evtEnd = evt.end ? new Date(evt.end).getTime() : evtStart;
+
+    // 如果行程的開始時間早於今日結束，且結束時間晚於今日開始，即代表行程涵蓋今日
+    return evtStart <= todayEnd && evtEnd >= todayStart;
   });
 
   // 從後端 API 撈取 Google Sheet 待辦事項
@@ -51,40 +116,9 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedEvent]);
 
-  // Click event in Daily Report to open linked meeting note
-  const handleEventClick = async (evt) => {
+  // Click event in Daily Report to open linked meeting note via EventNoteModal
+  const handleEventClick = (evt) => {
     setSelectedEvent(evt);
-    const fileName = `daily/meeting-${evt.summary.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}.md`;
-
-    try {
-      const res = await fetch(`/api/notes/file?relPath=${encodeURIComponent(fileName)}`);
-      const data = await res.json();
-      const content = (data && data.data) ? data.data.content : data.content;
-      if ((data.status === 'success' || data.success) && content) {
-        setEventNoteContent(content);
-        setNoteExists(true);
-      } else {
-        const timeString = `${new Date(evt.start).toLocaleString()} - ${new Date(evt.end).toLocaleTimeString()}`;
-        let template = `# 📌 會議記錄：${evt.summary}\n\n`;
-        template += `- **行程名稱**：${evt.summary}\n`;
-        template += `- **日期時間**：${timeString}\n`;
-        template += `- **來源**：${evt.source || 'Google Calendar'}\n`;
-        if (evt.location) template += `- **地點/連結**：${evt.location}\n`;
-        template += `\n---\n\n## 💡 補充紀錄與觀察\n- \n\n## 🚀 待辦事項 (Action Items)\n- [ ] \n`;
-        
-        setEventNoteContent(template);
-        setNoteExists(false);
-      }
-    } catch (err) {
-      console.error('Error fetching event note:', err);
-    }
-  };
-
-  const handleSaveEventNote = () => {
-    if (!selectedEvent) return;
-    const fileName = `daily/meeting-${selectedEvent.summary.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}.md`;
-    onSaveNewNote(fileName, eventNoteContent);
-    setSelectedEvent(null);
   };
 
   // Generate complete Markdown text for the daily report
@@ -98,7 +132,9 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
     } else {
       todayEvents.forEach(evt => {
         const timeStr = `${new Date(evt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(evt.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        md += `- **[${timeStr}]** ${evt.summary} (${evt.source || 'Google Calendar'})${evt.location ? ` | 📍 ${evt.location}` : ''}\n`;
+        const linkedNotePath = findNotePathForEvent(evt, notesTree);
+        const noteLinkText = linkedNotePath ? ` | 🔗 **[會議紀錄筆記](./${linkedNotePath.replace(/^daily\//, '')})**` : '';
+        md += `- **[${timeStr}]** ${evt.summary} (${evt.source || 'Google Calendar'})${evt.location ? ` | 📍 ${evt.location}` : ''}${noteLinkText}\n`;
       });
     }
     md += `\n`;
@@ -213,39 +249,58 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
                 今日無排定行程
               </p>
             ) : (
-              todayEvents.map((evt, idx) => (
-                <div
-                  key={evt.id || idx}
-                  className="glass-card"
-                  onClick={() => handleEventClick(evt)}
-                  style={{
-                    padding: '12px',
-                    display: 'flex',
-                    gap: '12px',
-                    alignItems: 'center',
-                    cursor: 'pointer',
-                    transition: 'var(--transition-fast)',
-                    minWidth: 0
-                  }}
-                >
-                  <div style={{
-                    width: '4px',
-                    height: '36px',
-                    borderRadius: '2px',
-                    background: 'var(--accent-cyan)',
-                    flexShrink: 0
-                  }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <h4 style={{ fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{evt.summary}</h4>
+              todayEvents.map((evt, idx) => {
+                const linkedNotePath = findNotePathForEvent(evt, notesTree);
+                return (
+                  <div
+                    key={evt.id || idx}
+                    className="glass-card"
+                    onClick={() => handleEventClick(evt)}
+                    style={{
+                      padding: '12px',
+                      display: 'flex',
+                      gap: '12px',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                      transition: 'var(--transition-fast)',
+                      minWidth: 0,
+                      border: linkedNotePath ? '1px solid rgba(16, 185, 129, 0.45)' : undefined
+                    }}
+                  >
+                    <div style={{
+                      width: '4px',
+                      height: '36px',
+                      borderRadius: '2px',
+                      background: linkedNotePath ? '#10b981' : 'var(--accent-cyan)',
+                      flexShrink: 0
+                    }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h4 style={{ fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{evt.summary}</h4>
+                        {linkedNotePath && (
+                          <span style={{
+                            fontSize: '11px',
+                            color: '#10b981',
+                            background: 'rgba(16, 185, 129, 0.15)',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            flexShrink: 0
+                          }}>
+                            📝 已關聯筆記
+                          </span>
+                        )}
+                      </div>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <span><Clock size={12} /> {new Date(evt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(evt.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        {evt.location && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>| 📍 {evt.location}</span>}
+                      </p>
                     </div>
-                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                      <span><Clock size={12} /> {new Date(evt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(evt.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      {evt.location && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>| 📍 {evt.location}</span>}
-                    </p>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -318,65 +373,13 @@ export default function ReportView({ events, notesTree, onSaveNewNote, showToast
         />
       </div>
 
-      {/* Floating Centered Glassmorphism Modal for Event Note Inspection */}
-      {selectedEvent && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(9, 13, 22, 0.75)',
-          backdropFilter: 'blur(10px)',
-          display: 'grid',
-          placeContent: 'center',
-          zIndex: 1000
-        }}>
-          <div className="glass-panel" style={{
-            width: '580px',
-            padding: '24px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
-            animation: 'fadeIn 0.2s ease-in-out'
-          }}>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--accent-cyan)' }}>
-                📌 {noteExists ? '查看連動會議筆記' : '新建連動會議筆記'}
-              </h3>
-              <button type="button" onClick={() => setSelectedEvent(null)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <textarea
-              value={eventNoteContent}
-              onChange={(e) => setEventNoteContent(e.target.value)}
-              style={{
-                width: '100%',
-                height: '240px',
-                background: 'rgba(15, 23, 42, 0.8)',
-                border: '1px solid var(--border-glass-bright)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-                color: 'var(--text-main)',
-                fontFamily: 'monospace',
-                fontSize: '13px',
-                lineHeight: '1.6',
-                resize: 'none',
-                outline: 'none'
-              }}
-            />
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button type="button" className="btn-secondary" onClick={() => setSelectedEvent(null)}>取消</button>
-              <button className="btn-primary" onClick={handleSaveEventNote} style={{ background: 'linear-gradient(135deg, var(--accent-emerald), #059669)' }}>
-                <Save size={16} /> 儲存筆記
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
+      {/* Floating Centered Glassmorphism Modal for Event Note Inspection (Extracted Reusable Component) */}
+      <EventNoteModal
+        isOpen={!!selectedEvent}
+        event={selectedEvent}
+        onClose={() => setSelectedEvent(null)}
+        onSaveNote={onSaveNewNote}
+      />
 
     </div>
   );

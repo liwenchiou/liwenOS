@@ -51,7 +51,7 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
     fetchScratchpad();
   }, []);
 
-  // 3. 防抖自動存檔至 ./notes/scratchpad.md (800ms)
+  // 3. 防抖自動存檔至 ./notes/scratchpad.md (500ms)
   const autoSaveScratchpad = async (content) => {
     try {
       setSaveStatus('儲存中...');
@@ -61,6 +61,9 @@ export default function DashboardView({ events, notesTree, onOpenCreateModal, on
         body: JSON.stringify({ relPath: 'scratchpad.md', content })
       });
       setSaveStatus('已同步');
+      setTimeout(() => {
+        setSaveStatus((prev) => (prev === '已同步' ? '已儲存' : prev));
+      }, 2500);
     } catch (err) {
       setSaveStatus('儲存失敗');
     }

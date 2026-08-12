@@ -192,4 +192,26 @@ router.delete('/file', async (req, res) => {
   }
 });
 
+// 6. Rename/Move File
+router.put('/rename', async (req, res) => {
+  try {
+    const { oldPath, newPath } = req.body;
+    if (!oldPath || !newPath) return res.status(400).json({ error: 'Missing oldPath or newPath' });
+
+    const baseDir = getNotesBaseDir();
+    const sourcePath = path.resolve(baseDir, oldPath);
+    const destPath = path.resolve(baseDir, newPath);
+
+    if (!sourcePath.startsWith(baseDir) || !destPath.startsWith(baseDir)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await fs.mkdir(path.dirname(destPath), { recursive: true });
+    await fs.rename(sourcePath, destPath);
+    res.json({ success: true, message: 'Renamed successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;

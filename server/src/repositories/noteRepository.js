@@ -115,6 +115,15 @@ class NoteRepository {
     await fs.rm(targetPath, { recursive: true, force: true });
   }
 
+  async renameItem(oldRelPath, newRelPath) {
+    const baseDir = getNotesBaseDir();
+    const oldPath = path.resolve(baseDir, oldRelPath);
+    const newPath = path.resolve(baseDir, newRelPath);
+    await fs.mkdir(path.dirname(newPath), { recursive: true });
+    await fs.rename(oldPath, newPath);
+    return newRelPath;
+  }
+
   // Scan all markdown files for search
   async getAllMarkdownFiles(dirPath = getNotesBaseDir(), relativePath = '') {
     let files = [];

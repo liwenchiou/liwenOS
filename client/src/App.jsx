@@ -148,6 +148,34 @@ export default function App() {
     }
   };
 
+  // 7. 重新命名檔案或資料夾 / 拖拉移動
+  const handleRenameFile = async (oldPath, newPath) => {
+    try {
+      const res = await fetch('/api/notes/rename', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPath, newPath })
+      });
+      const data = await res.json();
+      if (isSuccess(data)) {
+        showToast(`已將「${oldPath}」移動／重新命名為「${newPath}」`, 'success');
+        await fetchNotesTree();
+        if (selectedFilePath === oldPath) {
+          setSelectedFilePath(newPath);
+        } else if (selectedFilePath.startsWith(`${oldPath}/`)) {
+          setSelectedFilePath(newPath + selectedFilePath.substring(oldPath.length));
+        }
+        return true;
+      } else {
+        showToast(`操作失敗: ${data.message || '未知錯誤'}`, 'error');
+        return false;
+      }
+    } catch (err) {
+      showToast('操作失敗: ' + err.message, 'error');
+      return false;
+    }
+  };
+
   // 7. 新增行程至 Google Calendar
   const handleCreateEvent = async (eventData) => {
     try {
@@ -252,6 +280,7 @@ export default function App() {
             fileContent={fileContent}
             onSaveFile={handleSaveFile}
             onCreateFile={handleCreateFile}
+            onRenameFile={handleRenameFile}
             onDeleteFile={handleDeleteFile}
             onOpenCreateModalWithTitle={handleOpenCreateModalWithTitle}
             showToast={showToast}
